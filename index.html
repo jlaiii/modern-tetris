@@ -127,6 +127,18 @@ p{margin:0 0 10px; color:var(--muted)}
   background:var(--panel-2); color:var(--accent); min-width:56px; text-align:center; font-variant-numeric:tabular-nums}
 .note{font-size:.82rem; color:var(--muted); margin:10px 2px 0}
 
+/* ---------- tabs ---------- */
+.tabs{display:flex; gap:8px; overflow-x:auto; padding:2px 2px 10px; margin:0 -2px; scrollbar-width:none; -ms-overflow-style:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:0 0 auto; min-height:44px; padding:0 15px; display:inline-flex; align-items:center; gap:7px; border-radius:999px;
+  border:1px solid var(--line); background:var(--panel-2); color:var(--fg); font:600 .88rem/1 inherit; cursor:pointer;
+  white-space:nowrap; transition:background .14s ease, color .14s ease, border-color .14s ease}
+.tab:active{transform:translateY(1px)}
+.tab[aria-selected="true"]{background:linear-gradient(140deg,var(--accent),var(--accent-2)); border-color:transparent; color:var(--accent-ink)}
+.tab .cnt{font-size:.72rem; font-weight:700; opacity:.55; font-variant-numeric:tabular-nums}
+.tab[aria-selected="true"] .cnt{opacity:.75}
+.tabhead{font-size:.76rem; letter-spacing:.10em; text-transform:uppercase; color:var(--muted); margin:2px 2px 8px}
+
 /* ---------- HUD + playfield ---------- */
 #screen-game{padding:8px 10px calc(8px + env(safe-area-inset-bottom)); display:flex}
 .game-shell{display:flex; flex-direction:column; gap:8px; width:100%; max-width:640px; margin:0 auto; min-height:0}
@@ -367,12 +379,10 @@ body[data-screen="game"] .toast{bottom:calc(150px + env(safe-area-inset-bottom))
     <section class="screen" id="screen-cheats">
       <div class="wrap">
         <h2>Cheats</h2>
-        <p>Every cheat is toggleable and applies instantly — including mid-game from the pause screen. Runs played with cheats on are saved as <b>assisted</b>.</p>
-        <h3>Toggles</h3>
+        <p>Thirty cheats, all toggleable and applying instantly — including mid-game from the pause screen. Runs played with cheats on are saved as <b>assisted</b>.</p>
+        <div class="tabs" id="cheatTabs" role="tablist" aria-label="Cheat groups"></div>
         <div class="rows" id="cheatRows"></div>
-        <h3>Actions</h3>
-        <div class="rows" id="cheatActions"></div>
-        <div class="note">Actions work while a game is running. Open the pause screen to use them in the middle of a run.</div>
+        <div class="note" id="cheatNote">Actions work while a game is running. Open the pause screen to use them in the middle of a run.</div>
       </div>
     </section>
 
@@ -526,11 +536,32 @@ var LINE_SCORE = [0,100,300,500,800];
 var TSPIN_SCORE = [0,800,1200,1600];
 var TSPIN_MINI_SCORE = [0,200,400];
 /* auto-play heuristic weights (El-Tetris feature set) */
+var rngState = null;                    /* null = Math.random; set via seed() for deterministic tests */
+function rnd(){
+  if(rngState === null) return Math.random();
+  rngState = (rngState * 1664525 + 1013904223) >>> 0;
+  return rngState / 4294967296;
+}
 var BOT_W = { land:-4.5, rows:3.42, rowTrans:-3.22, colTrans:-9.35, holes:-7.9, wells:-3.39 };
+var BOT_W_PERFECT  = { land:-4.2, rows:6.40, rowTrans:-3.20, colTrans:-9.40, holes:-12.5, wells:-3.40 };
+var BOT_W_SURVIVOR = { land:-5.0, rows:1.00, rowTrans:-3.40, colTrans:-12.0, holes:-15.0, wells:-1.60 };
+var BOT_MODES = ["off","balanced","tetris","perfect","survivor","speed","saboteur"];
+var BOT_MODE_NAMES = ["Off","Balanced","Tetris Hunter","Perfect Clear","Survivor","Speed Demon","Saboteur"];
+var BOT_MS = [300, 90, 35, 14];
+var BOT_MS_NAMES = ["Chill","Normal","Fast","Turbo"];
+var WELL_COL = 0;                /* Tetris Hunter keeps this column open for I pieces */
+var GARBAGE = "#5a6472";
+COLORS.G = GARBAGE;
 
 /* ============================ state ============================ */
 var DEF_SET = { sound:true, haptics:true, theme:0, grid:true, ghost:true, next:2, startLevel:0, swipe:true, lefty:false };
-var DEF_CH  = { noTopOut:false, infiniteHold:false, zeroG:false, slowMo:false, multiplier:0, autoplay:false };
+var DEF_CH  = {
+  botMode:0, botSpeed:1, deepThink:false, botHold:false, showPlan:false, autoRestart:false,
+  noTopOut:false, infiniteHold:false, zeroG:false, slowMo:false, hyper:false, smartSlow:false, antiGravity:false,
+  comboKeeper:false, b2bKeeper:false, tetrisForever:false, freezeLevel:false, multiplier:0,
+  guide:false, holeGlow:false, liveStats:false,
+  autoplay:false
+};
 var THEMES = ["neon","synth","mono","day"];
 var THEME_NAMES = ["Neon","Synthwave","Mono","Daylight"];
 var MULT = [1,2,5,10];
@@ -548,16 +579,49 @@ var SETTINGS = [
   { id:"lefty", label:"Left-handed layout", desc:"Mirrors the touch pad for left thumbs.", type:"toggle" },
   { id:"resetScores", label:"Reset high scores", desc:"Wipes the top 10 list on this device.", type:"action" }
 ];
+var CHEAT_GROUPS = [
+  { id:"bot",     label:"Auto-play" },
+  { id:"board",   label:"Board" },
+  { id:"control", label:"Control" },
+  { id:"score",   label:"Pieces & Score" },
+  { id:"visual",  label:"Visuals" }
+];
 var CHEATS = [
-  { id:"noTopOut", label:"No top-out", desc:"Blocks that would overflow are discarded — the game never ends.", type:"toggle" },
-  { id:"infiniteHold", label:"Infinite hold", desc:"Swap with hold as many times as you like.", type:"toggle" },
-  { id:"zeroG", label:"Zero gravity", desc:"Pieces only move when you move them.", type:"toggle" },
-  { id:"slowMo", label:"Slow motion", desc:"Gravity runs at a quarter speed.", type:"toggle" },
-  { id:"multiplier", label:"Score multiplier", desc:"Multiply every point you earn.", type:"cycle", options:["1x","2x","5x","10x"] },
-  { id:"autoplay", label:"Auto-play", desc:"The machine plays with a stacking heuristic.", type:"toggle" },
-  { id:"instantClear", label:"Clear bottom row", desc:"Deletes the lowest occupied row right now.", type:"action" },
-  { id:"picker", label:"Choose a piece", desc:"Spawn any of the seven pieces on demand.", type:"action" },
-  { id:"undo", label:"Undo last drop", desc:"Step back up to 5 drops.", type:"action" }
+  /* ---------- auto-play ---------- */
+  { id:"botMode", group:"bot", quick:true, label:"Auto-play", desc:"Off, or a bot personality: Balanced, Tetris Hunter, Perfect Clear, Survivor, Speed Demon, Saboteur.", type:"cycle", options:BOT_MODE_NAMES },
+  { id:"botSpeed", group:"bot", quick:true, label:"Bot speed", desc:"How fast the machine moves. Speed Demon always runs Turbo.", type:"cycle", options:BOT_MS_NAMES },
+  { id:"deepThink", group:"bot", label:"Deep think", desc:"Look one piece ahead before committing — slower decisions, tidier stacking.", type:"toggle" },
+  { id:"botHold", group:"bot", label:"Bot uses hold", desc:"Let the bot park a piece in hold when the next one fits better.", type:"toggle" },
+  { id:"showPlan", group:"bot", quick:true, label:"Show bot plan", desc:"Outlines the placement the bot has picked before it commits.", type:"toggle" },
+  { id:"autoRestart", group:"bot", label:"Auto-restart", desc:"Start a fresh run automatically when the stack tops out.", type:"toggle" },
+  /* ---------- board ---------- */
+  { id:"noTopOut", group:"board", quick:true, label:"No top-out", desc:"Blocks that would overflow are discarded — the game never ends.", type:"toggle" },
+  { id:"clearBottom", group:"board", quick:true, label:"Clear bottom row", desc:"Deletes the lowest occupied row right now.", type:"action" },
+  { id:"wipeBoard", group:"board", label:"Wipe the board", desc:"Empties the whole playfield. Score and level stay.", type:"action" },
+  { id:"bombColumn", group:"board", label:"Bomb tallest column", desc:"Rubs out every block in the column that is built highest.", type:"action" },
+  { id:"fillBottom", group:"board", label:"Load bottom row", desc:"Fills the bottom row and leaves a single gap for you to close.", type:"action" },
+  { id:"garbageRain", group:"board", label:"Garbage rain", desc:"Pushes five rows of garbage up from the floor.", type:"action" },
+  { id:"undo", group:"board", quick:true, label:"Undo last drop", desc:"Step back up to 5 drops.", type:"action" },
+  { id:"rewind", group:"board", label:"Rewind run", desc:"Restart the run without leaving the board — board, score, lines and level reset.", type:"action" },
+  /* ---------- control ---------- */
+  { id:"zeroG", group:"control", quick:true, label:"Zero gravity", desc:"Pieces only move when you move them.", type:"toggle" },
+  { id:"slowMo", group:"control", quick:true, label:"Slow motion", desc:"Gravity runs at a quarter speed.", type:"toggle" },
+  { id:"hyper", group:"control", label:"Hyper speed", desc:"Gravity runs eight times faster.", type:"toggle" },
+  { id:"smartSlow", group:"control", label:"Smart slow-mo", desc:"Drops into slow motion on its own once the stack gets dangerous.", type:"toggle" },
+  { id:"antiGravity", group:"control", label:"Anti-gravity", desc:"Pieces float upwards and lock against the ceiling.", type:"toggle" },
+  /* ---------- pieces & score ---------- */
+  { id:"infiniteHold", group:"score", label:"Infinite hold", desc:"Swap with hold as many times as you like.", type:"toggle" },
+  { id:"picker", group:"score", label:"Choose a piece", desc:"Spawn any of the seven pieces on demand.", type:"action" },
+  { id:"randomPiece", group:"score", label:"Random piece", desc:"Swap the falling piece for a random one.", type:"action" },
+  { id:"comboKeeper", group:"score", label:"Combo keeper", desc:"A miss no longer breaks your combo chain.", type:"toggle" },
+  { id:"b2bKeeper", group:"score", label:"Back-to-back keeper", desc:"The x1.5 back-to-back bonus never drops.", type:"toggle" },
+  { id:"tetrisForever", group:"score", label:"Tetris forever", desc:"Any line clear scores as a Tetris.", type:"toggle" },
+  { id:"multiplier", group:"score", label:"Score multiplier", desc:"Multiply every point you earn.", type:"cycle", options:["1x","2x","5x","10x"] },
+  { id:"freezeLevel", group:"score", label:"Freeze level", desc:"Gravity stays put — the level never rises.", type:"toggle" },
+  /* ---------- visuals ---------- */
+  { id:"guide", group:"visual", label:"Column guide", desc:"Vertical light under the falling piece down to the floor.", type:"toggle" },
+  { id:"holeGlow", group:"visual", label:"Hole highlighter", desc:"Tints covered gaps in the stack so they are easy to spot.", type:"toggle" },
+  { id:"liveStats", group:"visual", label:"Live stats", desc:"Pieces, pieces per second, stack height and holes, drawn on the board.", type:"toggle" }
 ];
 
 var SET = load(KEY_SET, DEF_SET);
@@ -569,7 +633,7 @@ var S = {
   state:"menu", board:null, active:null, queue:[], bag:[], hold:null, holdUsed:false,
   score:0, lines:0, level:1, combo:-1, b2b:false, grav:0, lock:0, lockResets:0, soft:false, softAcc:0,
   elapsed:0, pieces:0, tetrises:0, assisted:false, lastKick:-1, lastMoveWasRotation:false, tSpin:"none",
-  botAcc:0, botTarget:null, undo:[], flash:0, toppedOut:false
+  botAcc:0, botTarget:null, botFails:0, botHeld:false, botScore:0, undo:[], flash:0, toppedOut:false
 };
 
 /* ============================ helpers ============================ */
@@ -605,8 +669,54 @@ function rotMatrix(m, dir){
   return out;
 }
 function anyCheatOn(){
-  for(var k in CH){ if(k === "multiplier"){ if(CH[k] > 0) return true; } else if(CH[k]) return true; }
+  if(CH.botMode > 0) return true;
+  for(var k in CH){
+    /* botSpeed/botMode/multiplier are parameters, not cheats in themselves */
+    if(k === "multiplier" || k === "botSpeed" || k === "botMode" || k === "autoplay") continue;
+    if(CH[k]) return true;
+  }
   return false;
+}
+function botOn(){ return CH.botMode > 0; }
+function botMode(){ return BOT_MODES[CH.botMode] || "off"; }
+function botInterval(){
+  if(botMode() === "speed") return 14;
+  return BOT_MS[CH.botSpeed] || 90;
+}
+function botWeightsFor(mode){
+  if(mode === "survivor") return BOT_W_SURVIVOR;
+  if(mode === "perfect") return BOT_W_PERFECT;
+  return BOT_W;
+}
+function isBoardEmpty(b){
+  for(var y=0;y<TOTAL;y++){ for(var x=0;x<COLS;x++){ if(b[y][x]) return false; } }
+  return true;
+}
+function stackHeight(){
+  for(var y=0;y<TOTAL;y++){
+    for(var x=0;x<COLS;x++){ if(S.board[y][x]) return TOTAL - y; }
+  }
+  return 0;
+}
+function countHoles(){
+  var holes = 0, x, y, seen;
+  for(x=0;x<COLS;x++){
+    seen = false;
+    for(y=0;y<TOTAL;y++){
+      if(S.board[y][x]) seen = true;
+      else if(seen) holes++;
+    }
+  }
+  return holes;
+}
+/* is the falling piece resting? anti-gravity flips which direction "resting" means */
+function atRest(){
+  if(!S.active) return true;
+  if(CH.antiGravity) return S.active.y <= -BUF || !canMove(0,-1);
+  return !canMove(0,1);
+}
+function canRise(){
+  return !!S.active && S.active.y > -BUF && canMove(0,-1);
 }
 
 /* ============================ audio ============================ */
@@ -648,7 +758,7 @@ function buzz(ms){ if(!SET.haptics) return; try{ if(navigator.vibrate) navigator
 /* ============================ board / pieces ============================ */
 function newBag(){
   var b = TYPES.slice();
-  for(var i=b.length-1;i>0;i--){ var j = Math.floor(Math.random()*(i+1)); var t = b[i]; b[i] = b[j]; b[j] = t; }
+  for(var i=b.length-1;i>0;i--){ var j = Math.floor(rnd()*(i+1)); var t = b[i]; b[i] = b[j]; b[j] = t; }
   return b;
 }
 function fillQueue(){
@@ -658,13 +768,14 @@ function spawnX(type){ return type === "O" ? 4 : 3; }
 function makePiece(type){
   return { type:type, m:SHAPES[type], rot:0, x:spawnX(type), y:0 };
 }
-function collides(m, x, y){
+function collides(m, x, y, bd){
+  bd = bd || S.board;
   var n = m.length, by, bx;
   for(by=0;by<n;by++){ for(bx=0;bx<n;bx++){
     if(!m[by][bx]) continue;
     var nx = x + bx, ny = y + by;
     if(nx < 0 || nx >= COLS || ny >= TOTAL) return true;
-    if(ny >= 0 && S.board[ny][nx]) return true;
+    if(ny >= 0 && bd[ny][nx]) return true;
   }}
   return false;
 }
@@ -675,6 +786,7 @@ function spawn(type){
   S.active = makePiece(t);
   S.grav = 0; S.lock = 0; S.lockResets = 0;
   S.holdUsed = false;
+  S.botHeld = false; S.botScore = 0;
   S.tSpin = "none"; S.lastMoveWasRotation = false;
   if(collides(S.active.m, S.active.x, S.active.y)){
     if(CH.noTopOut){
@@ -774,6 +886,7 @@ function lockPiece(byHardDrop){
   for(by=0;by<n;by++){ for(bx=0;bx<n;bx++){
     if(!a.m[by][bx]) continue;
     var py = a.y + by;
+    if(py < 0) continue;                                  /* floated above the board (anti-gravity) */
     /* with No Top-Out on, blocks that spill into the buffer vanish; otherwise they
        stack up there and the next spawn collides -> block out */
     if(py < BUF && CH.noTopOut) continue;
@@ -798,24 +911,26 @@ function lockPiece(byHardDrop){
 
   var tspin = S.tSpin, gained = 0;
   var mult = MULT[CH.multiplier];
+  var eff = (CH.tetrisForever && cleared > 0) ? 4 : cleared;   /* "Tetris forever" scores any clear as a tetris */
   if(tspin !== "none" || cleared > 0){
     var base = 0;
     if(tspin === "tspin") base = cleared > 0 ? TSPIN_SCORE[cleared] : 400;
     else if(tspin === "mini") base = cleared > 0 ? TSPIN_MINI_SCORE[cleared] : 100;
-    else base = LINE_SCORE[cleared];
-    var difficult = (cleared === 4) || (tspin !== "none" && cleared > 0);
+    else base = LINE_SCORE[eff];
+    var difficult = (eff === 4) || (tspin !== "none" && cleared > 0);
     var b2bFactor = 1;
     if(difficult && S.b2b) b2bFactor = 1.5;
     gained += base * b2bFactor;
     if(cleared > 0){
       S.combo++;
       if(S.combo > 0) gained += 50 * S.combo;
-    } else {
+    } else if(!CH.comboKeeper){
       S.combo = -1;
     }
-    S.b2b = difficult;
+    if(difficult) S.b2b = true;
+    else if(!CH.b2bKeeper) S.b2b = false;
     gained *= S.level;
-  } else {
+  } else if(!CH.comboKeeper){
     S.combo = -1;
   }
   S.score += Math.round(gained * mult);
@@ -823,9 +938,9 @@ function lockPiece(byHardDrop){
   if(cleared){
     S.lines += cleared;
     var newLevel = Math.min(30, LEVEL_OPTS[SET.startLevel] + Math.floor(S.lines / 10));
-    var levelled = newLevel > S.level;
-    S.level = newLevel;
-    if(cleared === 4){ S.tetrises++; sfx("tetris"); buzz(60); }
+    var levelled = newLevel > S.level && !CH.freezeLevel;
+    S.level = CH.freezeLevel ? S.level : newLevel;
+    if(eff === 4){ S.tetrises++; sfx("tetris"); buzz(60); }
     else { sfx("clear"); buzz(25); }
     if(levelled) setTimeout(function(){ sfx("level"); }, 220);
     S.flash = 260;
@@ -835,7 +950,7 @@ function lockPiece(byHardDrop){
 
   S.tSpin = "none";
   spawn();
-  if(CH.autoplay) S.botTarget = null;
+  if(botOn()) S.botTarget = null;
 }
 
 /* ============================ gravity / loop ============================ */
@@ -849,32 +964,42 @@ function tick(dt){
   S.elapsed += dt / 1000;
   if(S.flash > 0) S.flash = Math.max(0, S.flash - dt);
 
-  var g = CH.zeroG ? Infinity : gravityFor(S.level) * (CH.slowMo ? 4 : 1);
+  var g = CH.zeroG ? Infinity : gravityFor(S.level);
+  if(!CH.zeroG){
+    if(CH.slowMo) g *= 4;
+    if(CH.hyper) g /= 8;
+    if(CH.smartSlow && !CH.hyper && stackHeight() >= 14) g *= 3;
+  }
   if(isFinite(g)){
     S.grav += dt;
     var guard = 0;
     while(S.grav >= g && guard++ < 24){
       S.grav -= g;
-      if(canMove(0,1)){ S.active.y++; S.lastMoveWasRotation = false; }
-      else break;
+      if(CH.antiGravity){
+        if(!canRise()) break;
+        S.active.y--; S.lastMoveWasRotation = false;
+      } else {
+        if(canMove(0,1)){ S.active.y++; S.lastMoveWasRotation = false; }
+        else break;
+      }
     }
   }
 
-  if(S.soft){
+  if(S.soft && !CH.antiGravity){
     S.softAcc += dt;
     var sg = 0;
     while(S.softAcc >= SOFT_MS && sg++ < 40){ S.softAcc -= SOFT_MS; if(!softStep()) break; }
     if(sg >= 40) S.softAcc = 0;
   }
 
-  if(S.active && !canMove(0,1)){
+  if(S.active && atRest()){
     S.lock += dt;
     if(S.lock >= LOCK_DELAY) lockPiece(false);
   } else {
     S.lock = 0;
   }
 
-  if(CH.autoplay) botTick(dt);
+  if(botOn()) botTick(dt);
 }
 
 /* ============================ auto-play bot ============================ */
@@ -926,52 +1051,121 @@ function boardFeatures(board){
   }
   return { rowTrans:rowTrans, colTrans:colTrans, holes:holes, wells:wells };
 }
-function placementScore(sim, cleared, landingH){
+function placementScore(sim, cleared, landingH, type, mode, wellCells, danger){
   var f = boardFeatures(sim);
-  return (BOT_W.land * landingH) + (BOT_W.rows * cleared) + (BOT_W.rowTrans * f.rowTrans) +
-         (BOT_W.colTrans * f.colTrans) + (BOT_W.holes * f.holes) + (BOT_W.wells * f.wells);
+  var W = botWeightsFor(mode);
+  var s = (W.land * landingH) + (W.rows * cleared) + (W.rowTrans * f.rowTrans) +
+          (W.colTrans * f.colTrans) + (W.holes * f.holes) + (W.wells * f.wells);
+  if(mode === "tetris"){
+    /* hunt tetrises: don't spend rows on small clears and keep the well open — but only while the
+       stack is safe. Once it climbs (danger), clear normally instead of piling into the ceiling. */
+    /* Tetris Hunter: hold the well column open for I pieces while the stack is safe, bank the
+       four-row clears when they land, and fall back to ordinary clears once the stack is in danger. */
+    if(cleared === 4) s += 700;
+    else if(cleared > 0 && type !== "I" && !danger) s -= 30 * cleared;
+    if(type !== "I" && !danger) s -= 55 * wellCells;
+    if(landingH > 14) s -= 35 * (landingH - 14);
+  } else if(mode === "perfect"){
+    if(cleared > 0) s += 85 * cleared;
+    if(isBoardEmpty(sim)) s += 1500;
+  }
+  return s;
+}
+/* the board that results from dropping `type` at rotation r / column x */
+function simulatePlacement(type, r, x, bd){
+  bd = bd || S.board;
+  var m = SHAPES[type], i;
+  for(i=0;i<r;i++) m = rotMatrix(m, 1);
+  if(collides(m, x, 0, bd)) return null;
+  var y = 0;
+  while(!collides(m, x, y+1, bd)) y++;
+  var sim = cloneBoard(bd), dropped = 0, by, bx, py, px, top = -1, bot = -1, well = 0;
+  for(by=0;by<m.length;by++){ for(bx=0;bx<m.length;bx++){
+    if(!m[by][bx]) continue;
+    py = y + by; px = x + bx;
+    if(py < 0 || py >= TOTAL || px < 0 || px >= COLS) continue;
+    sim[py][px] = type; dropped++;
+    if(top < 0 || by < top) top = by;
+    if(by > bot) bot = by;
+    if(px === WELL_COL) well++;
+  }}
+  if(dropped !== 4) return null;
+  var landingH = (TOTAL - (y + bot)) + (bot - top + 1) / 2;
+  var cleared = 0, yy, ok, xx;
+  for(yy=TOTAL-1; yy>=0; yy--){
+    ok = true;
+    for(xx=0;xx<COLS;xx++){ if(!sim[yy][xx]){ ok = false; break; } }
+    if(ok){ sim.splice(yy,1); sim.unshift(new Array(COLS).fill(null)); cleared++; }
+  }
+  return { sim:sim, cleared:cleared, landingH:landingH, well:well };
+}
+function botCandidates(type, bd, mode, keepSim, danger){
+  var out = [], r, nx, res, entry;
+  for(r=0;r<4;r++){
+    for(nx=-3; nx<COLS+1; nx++){
+      res = simulatePlacement(type, r, nx, bd);
+      if(!res) continue;
+      entry = { r:r, x:nx, score:placementScore(res.sim, res.cleared, res.landingH, type, mode, res.well, danger) };
+      if(keepSim) entry.sim = res.sim;
+      out.push(entry);
+    }
+  }
+  out.sort(function(p,q){ return q.score - p.score; });
+  return out;
 }
 function botPlan(){
   var a = S.active; if(!a) return null;
-  var best = null, r, i, nx, m, sim, trial, dropped, cleared, x, y, ok, by, bx, py, px, yy;
-  for(r=0;r<4;r++){
-    m = a.m;
-    for(i=0;i<r;i++) m = rotMatrix(m, 1);
-    for(nx=-3;nx<COLS+1;nx++){
-      if(collides(m, nx, 0)) continue;
-      y = 0; while(!collides(m, nx, y+1)) y++;
-      sim = cloneBoard(S.board);
-      dropped = 0;
-      var lowest = 0, highest = 0;
-      for(by=0;by<m.length;by++){ for(bx=0;bx<m.length;bx++){
-        if(!m[by][bx]) continue;
-        if(by > highest) highest = by;
-        if(!lowest) lowest = by;
-        py = y + by; px = nx + bx;
-        if(py < 0 || py >= TOTAL || px < 0 || px >= COLS) continue;
-        sim[py][px] = a.type; dropped++;
-      }}
-      if(dropped !== 4) continue;
-      var landingH = (TOTAL - (y + highest)) + (highest - lowest + 1) / 2;
-      /* remove the rows this landing would complete, exactly like the real lock does */
-      cleared = 0;
-      for(yy=TOTAL-1; yy>=0; yy--){
-        ok = true;
-        for(x=0;x<COLS;x++){ if(!sim[yy][x]){ ok = false; break; } }
-        if(ok){ sim.splice(yy,1); sim.unshift(new Array(COLS).fill(null)); cleared++; }
+  var mode = botMode();
+  var danger = stackHeight() >= 15;
+  var cands = botCandidates(a.type, S.board, mode, false, danger);
+  if(!cands.length) return null;
+  var pick = cands[0];
+
+  if(mode === "saboteur"){
+    /* plays for a worse board on purpose */
+    pick = cands[cands.length - 1];
+  } else if((CH.deepThink || mode === "tetris") && mode !== "speed" && cands.length > 1){
+    /* two-ply: score the top candidates together with the best reply for the next piece */
+    var nextType = S.queue[0], top = Math.min(8, cands.length), bestTotal = null, i, res, nc, total;
+    for(i=0;i<top;i++){
+      res = simulatePlacement(a.type, cands[i].r, cands[i].x, S.board);
+      if(!res) continue;
+      total = cands[i].score;
+      if(nextType){
+        nc = botCandidates(nextType, res.sim, mode, false, danger);
+        if(nc.length) total += 0.9 * nc[0].score;
       }
-      trial = { r:r, x:nx, score:placementScore(sim, cleared, landingH) };
-      if(!best || trial.score > best.score) best = trial;
+      if(bestTotal === null || total > bestTotal){ bestTotal = total; pick = cands[i]; }
     }
   }
-  return best;
+  return { r:pick.r, x:pick.x, score:pick.score };
 }
 function botTick(dt){
   S.botAcc += dt;
-  if(S.botAcc < 90) return;
+  var interval = botInterval();
+  if(S.botAcc < interval) return;
   S.botAcc = 0;
   if(!S.active) return;
-  if(!S.botTarget) S.botTarget = botPlan();
+  var mode = botMode();
+  if(!S.botTarget){
+    /* park the active piece in hold when the other piece clearly fits better */
+    if(CH.botHold && !S.holdUsed && !S.botHeld && mode !== "saboteur"){
+      var alt = S.hold || S.queue[0];
+      if(alt && alt !== S.active.type){
+        var mine = botCandidates(S.active.type, S.board, mode, false, stackHeight() >= 13);
+        var other = botCandidates(alt, S.board, mode, false, stackHeight() >= 13);
+        var mineBest = mine.length ? mine[0].score : -1e9;
+        var otherBest = other.length ? other[0].score : -1e9;
+        if(otherBest > mineBest + 18){
+          doHold();
+          S.botHeld = true; S.botTarget = null;
+          return;
+        }
+      }
+    }
+    S.botTarget = botPlan();
+    S.botScore = S.botTarget ? S.botTarget.score : 0;
+  }
   if(!S.botTarget) return;
   var t = S.botTarget;
   if(S.active.rot !== t.r){
@@ -997,7 +1191,7 @@ function resetRun(){
   S.combo = -1; S.b2b = false; S.grav = 0; S.lock = 0; S.lockResets = 0;
   S.soft = false; S.softAcc = 0; S.elapsed = 0; S.pieces = 0; S.tetrises = 0;
   S.assisted = anyCheatOn(); S.undo = []; S.flash = 0; S.toppedOut = false;
-  S.botAcc = 0; S.botTarget = null;
+  S.botAcc = 0; S.botTarget = null; S.botFails = 0; S.botHeld = false; S.botScore = 0;
   fillQueue();
   spawn();
 }
@@ -1064,6 +1258,10 @@ function gameOver(){
   sfx("over"); buzz(90);
   refreshMenu();
   renderScores();
+  if(CH.autoRestart){
+    toast("Auto-restarting");
+    setTimeout(function(){ if(CH.autoRestart) startGame(); }, 1400);
+  }
 }
 
 /* ============================ hold / actions ============================ */
@@ -1122,6 +1320,65 @@ function undoDrop(){
   markAssisted(); sfx("cheat"); buzz(15);
   focusGame();
   toast("Undone — " + S.undo.length + " step" + (S.undo.length === 1 ? "" : "s") + " left");
+}
+function gameRunning(){ return S.state === "playing" || S.state === "paused"; }
+function garbageRow(holeCol){
+  var r = new Array(COLS);
+  for(var x=0;x<COLS;x++) r[x] = (x === holeCol) ? null : "G";
+  return r;
+}
+function wipeBoard(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  S.board = freshBoard();
+  S.flash = 300;
+  markAssisted(); sfx("cheat"); buzz(20);
+  focusGame();
+  toast("Board wiped");
+}
+function bombTallestColumn(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  var heights = columnHeights(S.board), best = 0, x, y;
+  for(x=1;x<COLS;x++){ if(heights[x] > heights[best]) best = x; }
+  if(!heights[best]){ sfx("deny"); toast("Nothing to bomb"); return; }
+  for(y=0;y<TOTAL;y++) S.board[y][best] = null;
+  S.flash = 220;
+  markAssisted(); sfx("clear"); buzz(25);
+  focusGame();
+  toast("Column " + (best + 1) + " bombed");
+}
+function loadBottomRow(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  var y = TOTAL - 1, gap = Math.floor(rnd() * COLS), x;
+  for(x=0;x<COLS;x++) S.board[y][x] = (x === gap) ? null : "G";
+  S.flash = 180;
+  markAssisted(); sfx("cheat"); buzz(20);
+  focusGame();
+  toast("Bottom row loaded — one gap left");
+}
+function garbageRain(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  var hole = Math.floor(rnd() * COLS), i;
+  for(i=0;i<5;i++){ S.board.shift(); S.board.push(garbageRow(hole)); }
+  if(S.active) S.active.y = -BUF;          /* the stack pushed the piece up and out */
+  S.grav = 0;
+  S.flash = 320;
+  markAssisted(); sfx("clear"); buzz(30);
+  focusGame();
+  toast("Garbage rain — five rows up");
+}
+function rewindRun(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  resetRun();
+  S.state = "playing";
+  closeOverlays();
+  updateHud();
+  focusGame();
+  sfx("cheat"); buzz(25);
+  toast("Run rewound");
+}
+function randomPieceNow(){
+  if(!gameRunning()){ toast("Start a game first"); sfx("deny"); return; }
+  pickPiece(TYPES[Math.floor(rnd() * TYPES.length)]);
 }
 function openPicker(){
   if(S.state !== "playing" && S.state !== "paused"){ toast("Start a game first"); sfx("deny"); return; }
@@ -1267,7 +1524,33 @@ function render(){
       if(t) drawBlock(bctx, x*cell, (y-BUF)*cell, cell, COLORS[t]);
     }
   }
+  if(CH.holeGlow){
+    bctx.save();
+    bctx.fillStyle = "rgba(255,84,112,0.22)";
+    for(x=0;x<COLS;x++){
+      var covered = false;
+      for(y=0;y<TOTAL;y++){
+        if(S.board[y][x]) covered = true;
+        else if(covered && y >= BUF) bctx.fillRect(x*cell+1, (y-BUF)*cell+1, cell-2, cell-2);
+      }
+    }
+    bctx.restore();
+  }
   var a = S.active;
+  if(CH.guide && a && S.state !== "over"){
+    var gminX = 99, gmaxX = -99, gby, gbx;
+    for(gby=0;gby<a.m.length;gby++){ for(gbx=0;gbx<a.m.length;gbx++){
+      if(!a.m[gby][gbx]) continue;
+      if(gbx < gminX) gminX = gbx;
+      if(gbx > gmaxX) gmaxX = gbx;
+    }}
+    if(gmaxX >= gminX){
+      bctx.save();
+      bctx.fillStyle = THEMES[SET.theme] === "day" ? "rgba(31,111,235,0.13)" : "rgba(180,220,255,0.105)";
+      bctx.fillRect((a.x+gminX)*cell, 0, (gmaxX-gminX+1)*cell, H);
+      bctx.restore();
+    }
+  }
   if(a && S.state !== "over"){
     if(SET.ghost){
       var gy2 = a.y;
@@ -1297,6 +1580,40 @@ function render(){
     bctx.globalAlpha = (S.flash / 320) * 0.30;
     bctx.fillStyle = "#ffffff";
     bctx.fillRect(0, 0, W, H);
+    bctx.restore();
+  }
+  /* where the machine intends to put this piece */
+  if(CH.showPlan && S.botTarget && a && S.state === "playing"){
+    var tm = SHAPES[a.type], ti, tby, tbx, tpy;
+    for(ti=0;ti<S.botTarget.r;ti++) tm = rotMatrix(tm, 1);
+    var ty = 0;
+    while(!collides(tm, S.botTarget.x, ty+1)) ty++;
+    bctx.save();
+    bctx.strokeStyle = "rgba(255,47,176,0.95)";
+    bctx.lineWidth = 2;
+    bctx.setLineDash([4,3]);
+    for(tby=0;tby<tm.length;tby++){ for(tbx=0;tbx<tm.length;tbx++){
+      if(!tm[tby][tbx]) continue;
+      tpy = ty + tby - BUF;
+      if(tpy < 0) continue;
+      bctx.strokeRect((S.botTarget.x+tbx)*cell+1.5, tpy*cell+1.5, cell-3, cell-3);
+    }}
+    bctx.setLineDash([]);
+    bctx.restore();
+  }
+  if(CH.liveStats){
+    var pps = S.elapsed > 0.5 ? (S.pieces / S.elapsed) : 0;
+    var rows = ["pieces " + S.pieces, "pps " + pps.toFixed(2), "height " + stackHeight(), "holes " + countHoles()];
+    if(botOn()) rows.push("bot " + (S.botTarget ? Math.round(S.botScore) : "-"));
+    bctx.save();
+    bctx.font = "600 " + Math.max(9, Math.round(cell * 0.38)) + "px ui-monospace, SFMono-Regular, Menlo, monospace";
+    bctx.textBaseline = "top";
+    var lh = Math.max(11, Math.round(cell * 0.44)), pad = 5, tw = 0, ri;
+    for(ri=0;ri<rows.length;ri++) tw = Math.max(tw, bctx.measureText(rows[ri]).width);
+    bctx.fillStyle = "rgba(4,8,16,0.66)";
+    bctx.fillRect(4, 4, tw + pad*2, lh*rows.length + pad*2);
+    bctx.fillStyle = "rgba(233,238,250,0.92)";
+    for(ri=0;ri<rows.length;ri++) bctx.fillText(rows[ri], 4+pad, 4+pad + ri*lh);
     bctx.restore();
   }
 
@@ -1426,75 +1743,106 @@ function renderSettingRows(){
     host.appendChild(row);
   });
 }
-function cheatOptions(){
+var cheatTab = "bot";
+function cheatGroupList(group){ return CHEATS.filter(function(c){ return c.group === group; }); }
+function cheatQuickList(){
   var out = [];
-  CHEATS.forEach(function(c){
-    if(c.type === "toggle") out.push({ id:c.id, label:c.label, desc:c.desc, type:"toggle" });
-    else if(c.type === "cycle") out.push({ id:c.id, label:c.label, desc:c.desc, type:"cycle", options:c.options });
+  CHEAT_GROUPS.forEach(function(g){
+    out = out.concat(cheatGroupList(g.id).filter(function(c){ return c.quick; }));
   });
   return out;
 }
-function cheatActions(){ return CHEATS.filter(function(c){ return c.type === "action"; }); }
-function renderCheatToggles(host){
+function renderCheatTabs(){
+  var host = el("cheatTabs");
+  if(!host) return;
   host.innerHTML = "";
-  cheatOptions().forEach(function(item){
-    var row = document.createElement("div");
-    row.className = "row";
-    var label = document.createElement("div");
-    label.className = "label";
-    var b = document.createElement("b"); b.textContent = item.label;
-    var sp = document.createElement("span"); sp.textContent = item.desc;
-    label.appendChild(b); label.appendChild(sp);
-    row.appendChild(label);
-    if(item.type === "toggle"){
-      var sw = document.createElement("div");
-      sw.className = "switch"; sw.setAttribute("role", "switch");
-      sw.setAttribute("aria-checked", CH[item.id] ? "true" : "false");
-      sw.setAttribute("aria-label", item.label);
-      sw.addEventListener("click", function(){ setCheat(item.id, !CH[item.id]); renderCheatToggles(host); renderCheatToggles(el("pauseCheats")); });
-      row.appendChild(sw);
-    } else {
-      var pill = document.createElement("div");
-      pill.className = "pill"; pill.textContent = item.options[CH[item.id]];
-      pill.addEventListener("click", function(){
-        setCheat(item.id, (CH[item.id] + 1) % item.options.length);
-        renderCheatToggles(el("cheatRows")); renderCheatToggles(el("pauseCheats"));
-      });
-      row.appendChild(pill);
-    }
-    host.appendChild(row);
+  CHEAT_GROUPS.forEach(function(g){
+    var b = document.createElement("button");
+    b.className = "tab"; b.type = "button";
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", cheatTab === g.id ? "true" : "false");
+    b.dataset.group = g.id;
+    var name = document.createElement("span"); name.textContent = g.label;
+    var cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = String(cheatGroupList(g.id).length);
+    b.appendChild(name); b.appendChild(cnt);
+    b.addEventListener("click", function(){
+      cheatTab = g.id;
+      renderCheatTabs(); renderCheatPanel();
+      sfx("move");
+    });
+    host.appendChild(b);
   });
 }
-function runCheatAction(id){
-  if(id === "instantClear") instantClear();
-  else if(id === "picker") openPicker();
-  else if(id === "undo") undoDrop();
-}
-function renderCheatActions(){
-  var host = el("cheatActions");
-  host.innerHTML = "";
-  cheatActions().forEach(function(c){
-    var row = document.createElement("div");
-    row.className = "row tappable";
-    var label = document.createElement("div");
-    label.className = "label";
-    var b = document.createElement("b"); b.textContent = c.label;
-    var sp = document.createElement("span"); sp.textContent = c.desc;
-    label.appendChild(b); label.appendChild(sp);
+function renderCheatRow(host, c){
+  var row = document.createElement("div");
+  row.className = "row" + (c.type === "action" ? " tappable" : "");
+  var label = document.createElement("div");
+  label.className = "label";
+  var b = document.createElement("b"); b.textContent = c.label;
+  var sp = document.createElement("span"); sp.textContent = c.desc;
+  label.appendChild(b); label.appendChild(sp);
+  row.appendChild(label);
+  if(c.type === "toggle"){
+    var sw = document.createElement("div");
+    sw.className = "switch"; sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", CH[c.id] ? "true" : "false");
+    sw.setAttribute("aria-label", c.label);
+    sw.addEventListener("click", function(){ setCheat(c.id, !CH[c.id]); });
+    row.appendChild(sw);
+  } else if(c.type === "cycle"){
     var pill = document.createElement("div");
-    pill.className = "pill"; pill.textContent = "Use";
-    row.appendChild(label); row.appendChild(pill);
+    pill.className = "pill"; pill.textContent = c.options[CH[c.id]] || c.options[0];
+    pill.setAttribute("aria-label", c.label);
+    pill.addEventListener("click", function(){ setCheat(c.id, (CH[c.id] + 1) % c.options.length); });
+    row.appendChild(pill);
+  } else {
+    var use = document.createElement("div");
+    use.className = "pill"; use.textContent = "Use";
+    use.setAttribute("aria-label", c.label);
     row.addEventListener("click", function(){ runCheatAction(c.id); });
-    host.appendChild(row);
-  });
+    row.appendChild(use);
+  }
+  host.appendChild(row);
+}
+function renderCheatPanel(){
+  var host = el("cheatRows");
+  if(!host) return;
+  host.innerHTML = "";
+  cheatGroupList(cheatTab).forEach(function(c){ renderCheatRow(host, c); });
+  var note = el("cheatNote");
+  if(note){
+    var g = CHEAT_GROUPS.filter(function(x){ return x.id === cheatTab; })[0];
+    note.textContent = (g ? g.label + " — " : "") + "actions work while a game is running; open the pause screen to use them mid-run.";
+  }
+}
+function renderQuickCheats(){
+  var host = el("pauseCheats");
+  if(!host) return;
+  host.innerHTML = "";
+  cheatQuickList().forEach(function(c){ renderCheatRow(host, c); });
+}
+function renderCheatUI(){ renderCheatTabs(); renderCheatPanel(); renderQuickCheats(); }
+function runCheatAction(id){
+  if(id === "clearBottom") instantClear();
+  else if(id === "wipeBoard") wipeBoard();
+  else if(id === "bombColumn") bombTallestColumn();
+  else if(id === "fillBottom") loadBottomRow();
+  else if(id === "garbageRain") garbageRain();
+  else if(id === "rewind") rewindRun();
+  else if(id === "picker") openPicker();
+  else if(id === "randomPiece") randomPieceNow();
+  else if(id === "undo") undoDrop();
+  renderCheatPanel();
 }
 function setCheat(id, val){
-  CH[id] = val;
-  if(id === "autoplay" && !val) S.botTarget = null;
+  if(id === "autoplay"){ CH.botMode = val ? (CH.botMode || 1) : 0; CH.autoplay = !!val; }
+  else CH[id] = val;
+  if(!botOn()) S.botTarget = null;
   if(S.state === "playing" || S.state === "paused") markAssisted();
   saveAll();
   sfx("cheat"); buzz(12);
   updateAssistNote();
+  renderCheatUI();
 }
 function updateSoundIcon(){
   el("btnSound").innerHTML = SET.sound
@@ -1683,7 +2031,7 @@ document.addEventListener("visibilitychange", function(){
 el("menuPlay").addEventListener("click", startGame);
 el("menuScores").addEventListener("click", function(){ renderScores(); navTo("scores"); });
 el("menuSettings").addEventListener("click", function(){ renderSettingRows(); navTo("settings"); });
-el("menuCheats").addEventListener("click", function(){ renderCheatToggles(el("cheatRows")); renderCheatActions(); navTo("cheats"); });
+el("menuCheats").addEventListener("click", function(){ renderCheatUI(); navTo("cheats"); });
 el("menuHelp").addEventListener("click", function(){ navTo("help"); });
 el("btnBack").addEventListener("click", goBack);
 el("btnPause").addEventListener("click", function(){ if(S.state === "playing") pauseGame(); else if(S.state === "paused") resumeGame(); });
@@ -1692,7 +2040,7 @@ el("btnResume").addEventListener("click", resumeGame);
 el("btnRestart").addEventListener("click", function(){ closeOverlays(); startGame(); });
 el("btnQuit").addEventListener("click", quitToMenu);
 el("btnAllCheats").addEventListener("click", function(){
-  renderCheatToggles(el("cheatRows")); renderCheatActions();
+  renderCheatUI();
   el("pauseOverlay").classList.remove("open");
   backStack.push("game");
   showScreen("cheats");
@@ -1718,15 +2066,13 @@ applyLefty();
 S.board = freshBoard();
 fillQueue();
 renderSettingRows();
-renderCheatToggles(el("cheatRows"));
-renderCheatToggles(el("pauseCheats"));
-renderCheatActions();
+renderCheatUI();
 renderPicker();
 renderScores();
 refreshMenu();
 showScreen("menu");
 updateSoundIcon();
-el("hdrSub").textContent = "v1.0";
+el("hdrSub").textContent = "v1.1";
 
 /* debug / test hook */
 window.__tetris = {
@@ -1736,13 +2082,34 @@ window.__tetris = {
       hold:S.hold, queue:S.queue.slice(), active:S.active ? { type:S.active.type, x:S.active.x, y:S.active.y, rot:S.active.rot, m:S.active.m } : null,
       assisted:S.assisted, elapsed:S.elapsed, board:S.board.map(function(r){ return r.map(function(c){ return c || 0; }); }),
       undoDepth:S.undo.length, cheats:JSON.parse(JSON.stringify(CH)), settings:JSON.parse(JSON.stringify(SET)),
-      botTarget:S.botTarget, botFails:S.botFails, tSpin:S.tSpin, combo:S.combo, b2b:S.b2b
+      botTarget:S.botTarget, botFails:S.botFails, botHeld:S.botHeld, botScore:S.botScore,
+      botMode:botMode(), botInterval:botInterval(), botOn:botOn(),
+      combo:S.combo, b2b:S.b2b, tSpin:S.tSpin,
+      stackHeight:stackHeight(), holes:countHoles(), topOut:S.toppedOut, tetrises:S.tetrises
     };
   },
   start: startGame, pause: pauseGame, resume: resumeGame, quit: quitToMenu,
   move: move, rotate: rotate, softStep: softStep, hardDrop: hardDrop, hold: doHold,
   advance: function(ms, step){ var s = step || 16.7, left = ms; while(left > 0){ tick(Math.min(s, left)); left -= s; if(S.state !== "playing") break; } },
   setCheat: setCheat, setSetting: setSetting, instantClear: instantClear, undo: undoDrop, pickPiece: pickPiece,
+  setBoard: function(rows){
+    S.board = freshBoard();
+    for(var y=0;y<Math.min(rows.length, TOTAL);y++){
+      for(var x=0;x<Math.min(rows[y].length, COLS);x++){
+        var v = rows[y][x];
+        S.board[y][x] = (v === 0 || v === null || v === undefined || v === "") ? null : String(v);
+      }
+    }
+    return true;
+  },
+  wipeBoard: wipeBoard, bombColumn: bombTallestColumn, fillBottom: loadBottomRow, garbageRain: garbageRain,
+  rewind: rewindRun, randomPiece: randomPieceNow, runCheatAction: runCheatAction,
+  setCheatTab: function(g){ cheatTab = g; renderCheatUI(); return cheatTab; },
+  cheatTab: function(){ return cheatTab; },
+  botPlan: function(){ return botPlan(); },
+  botModes: function(){ return BOT_MODE_NAMES.slice(); },
+  seed: function(n){ rngState = (n === null || n === undefined) ? null : ((n >>> 0) || 1); return rngState; },
+  botSpeeds: function(){ return BOT_MS_NAMES.slice(); },
   setBotWeights: function(w){ for(var k in w){ if(Object.prototype.hasOwnProperty.call(BOT_W, k)) BOT_W[k] = w[k]; } return JSON.parse(JSON.stringify(BOT_W)); },
   botWeights: function(){ return JSON.parse(JSON.stringify(BOT_W)); },
   screen: function(){ return current; }, cell: function(){ return cell; }
