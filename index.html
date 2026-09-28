@@ -685,6 +685,9 @@ function spawn(type){
       return;
     }
   }
+  /* drop out of the hidden buffer rows so the new piece is on screen straight away */
+  var steps = 0;
+  while(steps < BUF && !collides(S.active.m, S.active.x, S.active.y + 1)){ S.active.y++; steps++; }
 }
 function canMove(dx, dy){
   if(!S.active) return false;
